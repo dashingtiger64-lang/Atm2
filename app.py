@@ -1,238 +1,168 @@
-import streamlit as st
+from flask import Flask, request, redirect, render_template_string, session
+from werkzeug.security import generate_password_hash, check_password_hash
 
-# ---------------------------
-# Account Class
-# ---------------------------
-class Account:
-    def __init__(self, account_number, pin, balance=0):
-        self.account_number = account_number
-        self.pin = pin
-        self.balance = balance
-        self.transactions = []
+app = Flask(__name__)
+app.secret_key = "super_secret_key"
 
-    def deposit(self, amount):
-        self.balance += amount
-        self.transactions.append(f"Deposited ₹{amount}")
-
-    def withdraw(self, amount):
-        if amount > self.balance:
-            self.transactions.append(
-                f"Failed Withdrawal ₹{amount} (Insufficient Balance)"
-            )
-            return False
-
-        self.balance -= amount
-        self.transactions.append(f"Withdrawn ₹{amount}")
-        return True
+# In-memory database
+accounts = {}
 
 
-# ---------------------------
-# Initialize Session State
-# ---------------------------
-if "accounts" not in st.session_state:
-    st.session_state.accounts = {}
+# ---------------- HTML TEMPLATES ----------------
+home_page = """
+<h1>🏦 ATM SYSTEM</h1>
 
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
+{% if not session.get('user') %}
+    <a href="/login">Login</a> | <a href="/create">Create Account</a>
+{% else %}
+    <p>Welcome {{session['user']}}</p>
+    <a href="/dashboard">Go to Dashboard</a><br><br>
+    <a href="/logout">Logout</a>
+{% endif %}
+"""
 
-if "current_user" not in st.session_state:
-    st.session_state.current_user = None
+login_page = """
+<h2>Login</h2>
+<form method="POST">
+    Account: <input name="acc"><br>
+    PIN: <input name="pin" type="password"><br>
+    <button type="submit">Login</button>
+</form>
+<p style="color:red">{{error}}</p>
+<a href="/">Home</a>
+"""
+
+create_page = """
+<h2>Create Account</h2>
+<form method="POST">
+    Account: <input name="acc"><br>
+    PIN: <input name="pin" type="password"><br>
+    Initial Balance: <input name="bal" type="number"><br>
+    <button type="submit">Create</button>
+</form>
+<p style="color:green">{{msg}}</p>
+<a href="/">Home</a>
+"""
+
+dashboard_page = """
+<h2>Dashboard - {{acc}}</h2>
+
+<p>Balance: ₹{{balance}}</p>
+
+<h3>Deposit</h3>
+<form method="POST" action="/deposit">
+    <input name="amount" type="number">
+    <button>Deposit</button>
+</form>
+
+<h3>Withdraw</h3>
+<form method="POST" action="/withdraw">
+    <input name="amount" type="number">
+    <button>Withdraw</button>
+</form>
+
+<h3>Transactions</h3>
+<ul>
+{% for t in transactions %}
+    <li>{{t}}</li>
+{% endfor %}
+</ul>
+
+<br>
+<a href="/logout">Logout</a>
+"""
 
 
-# ---------------------------
-# Page Config
-# ---------------------------
-st.set_page_config(
-    page_title="ATM Management System",
-    page_icon="🏦",
-    layout="centered"
-)
-
-st.title("🏦 ATM Management System")
+# ---------------- ROUTES ----------------
+@app.route("/")
+def home():
+    return render_template_string(home_page)
 
 
-# ---------------------------
-# Logged In User Dashboard
-# ---------------------------
-if st.session_state.logged_in:
+@app.route("/create", methods=["GET", "POST"])
+def create():
+    msg = ""
+    if request.method == "POST":
+        acc = request.form["acc"]
+        pin = request.form["pin"]
+        bal = float(request.form["bal"])
 
-    account = st.session_state.accounts[
-        st.session_state.current_user
-    ]
-
-    st.success(
-        f"Logged in as {account.account_number}"
-    )
-
-    menu = st.sidebar.selectbox(
-        "Select Option",
-        [
-            "Balance",
-            "Deposit",
-            "Withdraw",
-            "Transaction History",
-            "Logout"
-        ]
-    )
-
-    if menu == "Balance":
-        st.subheader("💰 Account Balance")
-
-        st.metric(
-            label="Current Balance",
-            value=f"₹{account.balance:.2f}"
-        )
-
-    elif menu == "Deposit":
-        st.subheader("➕ Deposit Money")
-
-        amount = st.number_input(
-            "Enter Amount",
-            min_value=1.0,
-            step=100.0
-        )
-
-        if st.button("Deposit"):
-            account.deposit(amount)
-
-            st.success(
-                f"₹{amount:.2f} deposited successfully!"
-            )
-
-    elif menu == "Withdraw":
-        st.subheader("➖ Withdraw Money")
-
-        amount = st.number_input(
-            "Enter Amount",
-            min_value=1.0,
-            step=100.0
-        )
-
-        if st.button("Withdraw"):
-            success = account.withdraw(amount)
-
-            if success:
-                st.success(
-                    f"₹{amount:.2f} withdrawn successfully!"
-                )
-            else:
-                st.error(
-                    "Insufficient Balance!"
-                )
-
-    elif menu == "Transaction History":
-        st.subheader("📜 Transaction History")
-
-        if account.transactions:
-            for t in reversed(account.transactions):
-                st.write("•", t)
+        if acc in accounts:
+            msg = "Account already exists!"
         else:
-            st.info("No transactions yet.")
+            accounts[acc] = {
+                "pin": generate_password_hash(pin),
+                "balance": bal,
+                "transactions": []
+            }
+            msg = "Account created successfully!"
 
-    elif menu == "Logout":
-        st.session_state.logged_in = False
-        st.session_state.current_user = None
+    return render_template_string(create_page, msg=msg)
 
-        st.success("Logged Out Successfully")
 
-        st.rerun()
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = ""
+    if request.method == "POST":
+        acc = request.form["acc"]
+        pin = request.form["pin"]
 
-# ---------------------------
-# Login / Create Account
-# ---------------------------
-else:
+        if acc in accounts and check_password_hash(accounts[acc]["pin"], pin):
+            session["user"] = acc
+            return redirect("/dashboard")
+        else:
+            error = "Invalid credentials"
 
-    tab1, tab2 = st.tabs(
-        ["🔐 Login", "📝 Create Account"]
+    return render_template_string(login_page, error=error)
+
+
+@app.route("/dashboard")
+def dashboard():
+    if "user" not in session:
+        return redirect("/login")
+
+    acc = session["user"]
+    data = accounts[acc]
+
+    return render_template_string(
+        dashboard_page,
+        acc=acc,
+        balance=data["balance"],
+        transactions=reversed(data["transactions"])
     )
 
-    # -----------------------
-    # LOGIN
-    # -----------------------
-    with tab1:
 
-        st.subheader("Login")
+@app.route("/deposit", methods=["POST"])
+def deposit():
+    acc = session["user"]
+    amount = float(request.form["amount"])
 
-        login_acc = st.text_input(
-            "Account Number"
-        )
+    accounts[acc]["balance"] += amount
+    accounts[acc]["transactions"].append(f"Deposited ₹{amount}")
 
-        login_pin = st.text_input(
-            "PIN",
-            type="password"
-        )
+    return redirect("/dashboard")
 
-        if st.button("Login"):
 
-            if login_acc in st.session_state.accounts:
+@app.route("/withdraw", methods=["POST"])
+def withdraw():
+    acc = session["user"]
+    amount = float(request.form["amount"])
 
-                acc = st.session_state.accounts[
-                    login_acc
-                ]
+    if amount > accounts[acc]["balance"]:
+        accounts[acc]["transactions"].append("Failed withdrawal (Insufficient balance)")
+    else:
+        accounts[acc]["balance"] -= amount
+        accounts[acc]["transactions"].append(f"Withdrawn ₹{amount}")
 
-                if acc.pin == login_pin:
+    return redirect("/dashboard")
 
-                    st.session_state.logged_in = True
-                    st.session_state.current_user = login_acc
 
-                    st.success(
-                        "Login Successful!"
-                    )
+@app.route("/logout")
+def logout():
+    session.pop("user", None)
+    return redirect("/")
 
-                    st.rerun()
 
-                else:
-                    st.error("Invalid PIN")
-
-            else:
-                st.error(
-                    "Account Not Found"
-                )
-
-    # -----------------------
-    # CREATE ACCOUNT
-    # -----------------------
-    with tab2:
-
-        st.subheader("Create New Account")
-
-        new_acc = st.text_input(
-            "New Account Number"
-        )
-
-        new_pin = st.text_input(
-            "Create PIN",
-            type="password"
-        )
-
-        initial_balance = st.number_input(
-            "Initial Deposit",
-            min_value=0.0,
-            step=100.0
-        )
-
-        if st.button("Create Account"):
-
-            if not new_acc:
-                st.error(
-                    "Account Number Required"
-                )
-
-            elif new_acc in st.session_state.accounts:
-                st.error(
-                    "Account Already Exists"
-                )
-
-            else:
-
-                st.session_state.accounts[
-                    new_acc
-                ] = Account(
-                    new_acc,
-                    new_pin,
-                    initial_balance
-                )
-
-                st.success(
-                    "Account Created Successfully!"
-                )
+# ---------------- MAIN ----------------
+if __name__ == "__main__":
+    app.run()
